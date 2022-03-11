@@ -175,6 +175,7 @@ func noTokenRouter(router *gin.Engine) {
 func Start(host string, port, timeout int, isSSL bool) {
 	router := gin.Default()
 	router.SetTrustedProxies(nil)
+	router.ForwardedByClientIP = true
 	router.Use(gzip.Gzip(gzip.DefaultCompression))
 	staticRouter(router)
 	noTokenRouter(router)

@@ -29,6 +29,16 @@ type failInfo struct {
 	count int
 }
 
+func getRealIP(c *gin.Context) string {
+	ip := c.ClientIP()
+	if ip == "::1" || ip == "127.0.0.1" {
+		if len(c.GetHeader("X-Real-IP")) > 0 {
+			ip = c.GetHeader("X-Real-IP")
+		}
+	}
+	return ip
+}
+
 func jwtInit(timeout int) {
 	if cache == nil {
 		cache = cache2go.Cache("passError")
@@ -79,8 +89,8 @@ func jwtInit(timeout int) {
 					return nil, err
 				}
 			}
-			clientIP := c.ClientIP()
-			if res, err := cache.Value(clientIP); err != nil {
+			clientIP := getRealIP(c)
+			if !cache.Exists(clientIP) {
 				if password == pass {
 					return &loginVals, nil
 				} else {
@@ -91,16 +101,22 @@ func jwtInit(timeout int) {
 					return nil, errors.New("已输错1次密码, 还有2次机会")
 				}
 			} else {
+				res, _ := cache.Value(clientIP)
 				failCount := res.Data().(*failInfo).count
 				if failCount >= 3 {
 					return nil, errors.New("已输错3次密码, 请等待30min后解锁")
 				} else {
-					cache.Delete(clientIP)
-					cache.Add(clientIP, 30*time.Minute, &failInfo{
-						clientIP,
-						failCount + 1,
-					})
-					return nil, errors.New(fmt.Sprintf("已输错%d次密码, 还有%d次机会", failCount, 3-failCount))
+					if password == pass {
+						cache.Delete(clientIP)
+						return &loginVals, nil
+					} else {
+						failCount += 1
+						cache.Add(clientIP, 30*time.Minute, &failInfo{
+							clientIP,
+							failCount,
+						})
+						return nil, errors.New(fmt.Sprintf("已输错%d次密码, 还有%d次机会", failCount, 3-failCount))
+					}
 				}
 			}
 		},
