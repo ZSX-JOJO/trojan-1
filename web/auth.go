@@ -1,9 +1,11 @@
 package web
 
 import (
+	"errors"
 	"fmt"
 	"github.com/appleboy/gin-jwt/v2"
 	"github.com/gin-gonic/gin"
+	"github.com/muesli/cache2go"
 	"time"
 	"trojan/core"
 	"trojan/web/controller"
@@ -13,6 +15,7 @@ var (
 	identityKey    = "id"
 	authMiddleware *jwt.GinJWTMiddleware
 	err            error
+	cache          *cache2go.CacheTable
 )
 
 // Login auth用户验证结构体
@@ -21,7 +24,15 @@ type Login struct {
 	Password string `form:"password" json:"password" binding:"required"`
 }
 
+type failInfo struct {
+	ip    string
+	count int
+}
+
 func jwtInit(timeout int) {
+	if cache == nil {
+		cache = cache2go.Cache("passError")
+	}
 	authMiddleware, err = jwt.New(&jwt.GinJWTMiddleware{
 		Realm:       "k8s-manager",
 		Key:         []byte("secret key"),
@@ -68,10 +79,30 @@ func jwtInit(timeout int) {
 					return nil, err
 				}
 			}
-			if password == pass {
-				return &loginVals, nil
+			clientIP := c.ClientIP()
+			if res, err := cache.Value(clientIP); err != nil {
+				if password == pass {
+					return &loginVals, nil
+				} else {
+					cache.Add(clientIP, 30*time.Minute, &failInfo{
+						clientIP,
+						1,
+					})
+					return nil, errors.New("已输错1次密码, 还有2次机会")
+				}
+			} else {
+				failCount := res.Data().(*failInfo).count
+				if failCount >= 3 {
+					return nil, errors.New("已输错3次密码, 请等待30min后解锁")
+				} else {
+					cache.Delete(clientIP)
+					cache.Add(clientIP, 30*time.Minute, &failInfo{
+						clientIP,
+						failCount + 1,
+					})
+					return nil, errors.New(fmt.Sprintf("已输错%d次密码, 还有%d次机会", failCount, 3-failCount))
+				}
 			}
-			return nil, jwt.ErrFailedAuthentication
 		},
 		Authorizator: func(data interface{}, c *gin.Context) bool {
 			if _, ok := data.(*Login); ok {
